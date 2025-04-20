@@ -1,0 +1,703 @@
+---
+title: 'Part A: Exploratory Analysis and Model Building'
+author: '202454419'
+date: "2025-04-10"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, error=TRUE)
+
+library(tidyverse)
+library(vioplot)
+library(corrplot)
+library(naniar)
+library(GGally)
+library(mice)
+library(car)
+library(cowplot)
+library(tidymodels)
+library(finetune)
+library(rsample)
+library(knitr)
+library(DALEXtra)
+tidymodels_prefer()
+
+
+#Read in unique data
+data <- read.csv("spotify_unique_data.csv")
+```
+# An initial exploratory analysis 
+
+To prepare the data for initial exploratory analysis, dataframe elements are output to assess data structure and identify duplicated rows. Moreover, the column binomial is excluded as a feature and the explanatory variables Key, Audio Mode, and Time signature are transformed to appropriately reflect each column's data type. 
+
+```{r data structure dimensions}
+paste0("The data on Spotify music has ", nrow(data), " rows and ", ncol(data), " columns.")
+```
+```{r data structure unique data types}
+paste0("There are ", length(unique(sapply(data, class))), " unique data types.")
+```
+```{r data structure data types}
+str(data)
+```
+
+```{r data structure changes}
+data <- data |> 
+  select(-binomial)
+
+data <- mutate_at(data, vars(Key, Audio_mode, Time_signature),
+                    as.factor)
+```
+
+# Data cleaning 
+
+To clean the reduced dataset, duplicated rows are identified and removed, data validity is examined and the extent of missing values are tabulated to capture the extent of missing data across the variables. 
+
+```{r duplicated rows count}
+duplicated.rows <- data[duplicated(data), ]
+
+paste0("The dataset has ", nrow(duplicated.rows), " duplicated rows.")
+```
+```{r duplicated rows removed}
+data.cleaned <- distinct(data)
+
+paste0("Dataframe dimensions of the cleaned dataset are ", nrow(data.cleaned), " rows and ", ncol(data.cleaned), " columns.")
+```
+
+A summary of the data reveals that there are measurement or data entry errors among the variables Duration ms, Acousticness, Loudness, Tempo and Time signature. 209 observations have values that are not consistent with the specified ranges. To remedy the inaccurate measurements, the values are transformed to NA values and the multiple imputation by chain equations method will be applied to estimate and update missing data. 
+
+```{r loctions measures summary}
+summary(data.cleaned)
+```
+```{r measurement or data entry errors}
+data.cleaned$Duration_ms[data.cleaned$Duration_ms < 0] <- NA
+
+data.cleaned$Acousticness[data.cleaned$Acousticness < 0 |data.cleaned$Acousticness > 1] <- NA
+
+data.cleaned$Loudness[data.cleaned$Loudness > 1] <- NA
+
+data.cleaned$Tempo[data.cleaned$Tempo < 0] <- NA
+
+data.cleaned$Time_signature[data.cleaned$Time_signature == 0 | data.cleaned$Time_signature == 1] <- NA
+```
+
+Of the 15 variables, 12 have missing values. In addition to the introduced null values, the total percentage of missing values is 4.5.
+
+# Missingness
+
+As the explanatory variables are interdependent, the missing values are likely missing at random therefore the probability of missing values is dependent on observed dataset values. Predictor subgroups could potentially account for the absent observation values. To mitigate modelling bias and enhance prediction precision, plausible data subsets of varying data types are computed iteratively and conditionally to best reflect existing relationships among the independent variables. Information from every variable is incorporated to formulate multiple input computation equations. Furthermore, the established subsets are reflective of the uncertainty that charactersies predictions as natural data variability is maintained in addition to the associations and interactions between the variables. 
+
+
+```{r missing values percentage, echo=FALSE}
+vis_miss(data.cleaned) 
+```
+```{r missing values porportions, echo=FALSE}
+gg_miss_var(data.cleaned) +
+  ggtitle("Missing Data Summary") +  
+  xlab("Variables") +               
+  ylab("Proportion of Missing Values") + 
+  theme_minimal() +                  
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  
+    plot.title = element_text(hjust = 0.5)               
+  ) 
+```
+```{r missing values table, echo=FALSE}
+missing.data.summary <- miss_var_summary(data.cleaned)
+
+missing.data.summary <- missing.data.summary |>
+  rename(
+    Variable = variable,
+    Count = n_miss,
+    Percentage = pct_miss
+  )
+
+kable(missing.data.summary)
+```
+```{r missingness of Duration ms, Acousticness, Danceability and Energy by Song Popularity, echo=FALSE}
+m1 <- ggplot(data.cleaned, aes(x = song_popularity, y = Duration_ms)) +
+  theme_minimal() +
+  geom_miss_point() +
+  labs(
+    x = "Song Popularity",
+    y = "Milliseconds"
+  ) +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  ggtitle("Duration ms") +
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+
+m2 <- ggplot(data.cleaned, aes(x = song_popularity, y = Acousticness)) +
+  theme_minimal() +
+  geom_miss_point() +
+  labs(
+    x = "Song Popularity",
+    y = "Confidence Measure"
+  ) +
+  ggtitle("Acousticness") +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+
+m3 <- ggplot(data.cleaned, aes(x = song_popularity, y = Danceability)) +
+  theme_minimal() +
+  geom_miss_point() +
+labs(
+  x = "Song Popularity",
+  y = "Confidence Measure"
+) +
+  ggtitle("Danceability") +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+
+m4 <- ggplot(data.cleaned, aes(x = song_popularity, y = Energy)) +
+  theme_minimal() +
+  geom_miss_point() +
+  labs(
+    x = "Song Popularity",
+    y = "Confidence Measure"
+  ) +
+  ggtitle("Energy") +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+
+
+```
+
+```{r missingness plots 1, echo=FALSE}
+plot_grid(m1, m2, m3, m4, nrow = 2, ncol = 2)
+```
+
+```{r missingness of Instrumentalness, Key, Liveness, Loudness and Audio Mode by Song Popularity, echo=FALSE}
+m5 <- ggplot(data.cleaned, aes(x = song_popularity, y = Instrumentalness)) +
+  theme_minimal() +
+  geom_miss_point() +
+  labs(
+    x = "Song Popularity",
+    y = "Confidence Measure"
+  ) +
+  ggtitle("Instrumentalness") +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+
+m6 <- ggplot(data.cleaned, aes(x = song_popularity, y = Key)) +
+  theme_minimal() +
+  geom_miss_point() +
+  labs(
+    x = "Song Popularity",
+    y = "song Key"
+  ) +
+  ggtitle("Key") +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+
+m7 <- ggplot(data.cleaned, aes(x = song_popularity, y = Liveness)) +
+  theme_minimal() +
+  geom_miss_point() +
+  labs(
+    x = "Song Popularity",
+    y = "Confidence Measure"
+  ) +
+  ggtitle("Liveness") +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+  
+m8 <- ggplot(data.cleaned, aes(x = song_popularity, y = Loudness)) +
+  theme_minimal() +
+  geom_miss_point() +
+  labs(
+    x = "Song Popularity",
+    y = "Decibel (dB)"
+  ) +
+  ggtitle("Loudness") +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+  
+m9 <- ggplot(data.cleaned, aes(x = song_popularity, y = Audio_mode)) +
+  theme_minimal() +
+  geom_miss_point() +
+  labs(
+    x = "Song Popularity",
+    y = "Melodic scale"
+  ) +
+  ggtitle("Audio Mode") +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+
+
+```
+
+```{r missingness plots 2, echo=FALSE}
+plot_grid(m5, m6, m7, m8, m9, nrow = 3, ncol = 2)
+```
+
+```{r missingness of Speechiness, Tempo, Time Signature and Audio Valence by Song Popularity, echo=FALSE}
+m10 <- ggplot(data.cleaned, aes(x = song_popularity, y = Speechiness)) +
+  theme_minimal() +
+  geom_miss_point() +
+  labs(
+    x = "Song Popularity",
+    y = "Confidence Measure"
+  ) +
+  ggtitle("Speechiness") +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+  
+m11 <- ggplot(data.cleaned, aes(x = song_popularity, y = Tempo)) +
+  theme_minimal() +
+  geom_miss_point() +
+  labs(
+    x = "Song Popularity",
+    y = "Beats per Measure (BPM)"
+  ) +
+  ggtitle("Tempo") +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+  
+m12 <- ggplot(data.cleaned, aes(x = song_popularity, y = Time_signature)) +
+  theme_minimal() +
+  geom_miss_point() +
+  labs(
+    x = "Song Popularity",
+    y = "Beates per Bar"
+  ) +
+  ggtitle("Time signature") +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+  
+m13 <- ggplot(data.cleaned, aes(x = song_popularity, y = Audio_valence)) +
+  theme_minimal() +
+  geom_miss_point() +
+  labs(
+    x = "Song Popularity",
+    y = "Confidence Measure"
+  ) +
+  ggtitle("Audio Valence") +
+  guides(
+    color = guide_legend(title = "Value Type", 
+                         title.theme = element_text(family = "sans", 
+                                                    face = "bold",
+                                                    size = 10))
+  ) + 
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black"),
+    legend.text = element_text(family = "sans", size = 10)
+  )
+
+
+```
+
+```{r missingness plots 3, echo=FALSE}
+plot_grid(m10, m11, m12, m13, nrow = 2, ncol = 2)
+```
+
+# Data imputation
+
+To prepare for MICE imputation, a method vetor is created to more accurately compute the predictors according to each variable's data type. 'pmm' is applied to numerical variables and 'polyreg' to factor variables. Moreover, 15 multiple imputations and 15 iterations are calculated.
+
+To increase the validity of the imputation process, the 270 observations with at least three missing values are removed. The degree of incompleteness minimally explains the factors that likely influence song popularity. 
+
+```{r missing values}
+data.cleaned2 <- data.cleaned[!rowSums(is.na(data.cleaned)) >= 3, ]
+
+paste0("Dataframe dimensions of the cleaned data updates are ", nrow(data.cleaned2), " rows and ", ncol(data.cleaned2), " columns.")
+```
+```{r data imputation, echo=FALSE}
+data.imput <- data.cleaned2 |>
+  select(-song_name)
+
+method_vector <- c(Song_popularity = "pmm",
+                   Duration_ms = "pmm",
+                   Acousticness = "pmm",
+                   Danceability = "pmm",
+                   Energy = "pmm",
+                   Instrumentalness = "pmm",
+                   Key = "polyreg",
+                   Liveness = "pmm",
+                   Loudness = "pmm",
+                   Audio_mode = "polyreg",
+                   Speechiness = "pmm",
+                   Tempo = "pmm",
+                   Time_signature = "polyreg",
+                   Audio_valence = "pmm")
+
+mice.imputation <- mice(data = data.imput,
+                        method = method_vector,
+                        m = 15,
+                        maxit = 15,
+                        seed = 1234)
+```
+
+```{r convergence plots 1}
+plot(mice.imputation,
+     which = c("Duration_ms", "Acousticness", "Danceability"),
+     lwd = 2)
+```
+There are clear signs of convergence across the 15 iterations for each imputed dataset. The mean and standard deviation ranges are reflective of the distinct units of measurement. 
+
+To assess the performance of the selected imputation technique, a pooled adjusted r-squared estimate, confidence interval and fraction of missing information are useful metrics to view. 
+
+```{r regression model statistics}
+reg.models.mice <- with(mice.imputation,
+                      lm(song_popularity ~ Duration_ms + Acousticness + Danceability + Energy + 
+                           Instrumentalness + Key + Liveness + Loudness + Audio_mode + Speechiness + 
+                           Tempo + Time_signature + Audio_valence))
+
+pool.r2 <- pool.r.squared(reg.models.mice, adjusted = TRUE)
+
+pool.r2
+```
+
+# Data imputation performance 
+
+The pooled adjusted R² from the regression models is 4.13%, with a 95% confidence interval ranging from 3.42% to 4.91%. The fraction of missing information (fmi) is 13.08% which indicates that the missing data modestly influences the estimates.As the data is quite complex, a low adjusted R² statistic is not uncommon. Although the predictors limitedly explain variance in song popularity, the confidence interval is relatively narrow which suggests that the estimate is fairly precise. Furthermore, the impact of the missing data does not significantly impact the predictive power of the regression model. To predict song popularity an explanatory model that accounts for the complexity of data on music is preferential. 
+
+To further assess the performance of the imputed datasets, the individual adjusted r-squared values are output to identify the model that marginally explains song popularity better than the other models. Thereafter, residual plots are created to examine the identified model's regression assumptions. 
+
+```{r distinct adjusted r-squared values}
+adjr2 <- numeric(mice.imputation$m)
+
+for (i in 1:mice.imputation$m) {
+  imputation.data <- complete(mice.imputation, action = i)
+  
+  model <- lm(song_popularity ~ Duration_ms + Acousticness + Danceability + Energy + 
+                Instrumentalness + Key + Liveness + Loudness + Audio_mode + Speechiness + 
+                Tempo + Time_signature + Audio_valence, data = imputation.data)
+  
+  adjr2[i] <- summary(model)$adj.r.squared
+}
+
+adjr2.df <- as.data.frame(adjr2) 
+
+adjr2.df$Imputation <- c(1:15)
+
+adjr2.df <- adjr2.df |>
+  group_by(adjr2, Imputation) |>
+  arrange(desc(adjr2)) |>
+  rename(`Adjusted R-Squared` = adjr2) 
+
+kable(adjr2.df)
+```
+
+```{r regression assumptions imputation 10}
+par(mfrow=c(2,2))
+
+plot(reg.models.mice$analyses[[10]],pch=16)
+```
+
+The residuals appear to be clustered across the Residuals vs Fitted, Scale-Location and Residuals vs Leverage plots therefore constant variance is unlikely. Considering the size of the dataset, the distribution of values above and below the mean are seemingly proportionate which suggests that the constant mean of zero assumption may uphold. However, as the residuals deviate from the diagonal line of the Q-Q plot, the values are unlikely normally distributed. 
+
+```{r dataset imputation 10}
+data.cleaned3 <- complete(mice.imputation, action = 10)
+
+kable(miss_var_summary(data.cleaned3))
+```
+
+All the missing values have been resolved.
+
+```{r distribution comparison original vs MICE computation, echo=FALSE}
+
+p1 <- ggplot(data.cleaned, aes(song_popularity))+
+  geom_histogram(fill = "#CC5500", color = "#4dffc0")+
+  theme_minimal() +
+  labs(
+    x = "Song Popularity",
+    y = "Count"
+    ) +
+  ggtitle("Original Distribution of Song Popularity") +
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black")
+  )
+p2 <- ggplot(data.cleaned3, aes(song_popularity)) +
+  geom_histogram(fill = "#5500cc", color = "#4dffc0") +
+  theme_minimal() +
+  labs(
+    x = "Song Popularity",
+    y = "Count"
+  ) +
+  ggtitle("MICE imputed values of Song Popularity") +
+  theme(
+    plot.title = element_text(family = "sans", face = "bold", hjust = 0.5, size = 14, colour = "black"),
+    axis.title.x = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.title.y = element_text(family = "sans", face = "bold", size = 10, colour = "black"),
+    axis.text = element_text(family = "sans", hjust = 0.5, size = 9, face = "bold", colour = "black")
+  )
+plot_grid(p1, p2, nrow = 2, ncol = 1)
+
+```
+
+The MICE imputation has a consistent distribution shape to the original distribution. 
+
+
+# Train-test-split using stratified sampling
+
+Training and test data split, and stratified sampling of the cleaned data
+
+```{r train-test split}
+set.seed(202454419)
+
+song.pop.split <- initial_split(
+  data.cleaned3, 
+  prop = 0.8, 
+  strata = song_popularity
+  )
+
+song.pop.train <- training(song.pop.split)
+
+song.pop.test <- testing(song.pop.split)
+```
+
+# 5-fold cross validation
+
+5-fold cross validation for parameter tuning
+
+```{r cross validation}
+cross.val.folds <- vfold_cv(song.pop.train, 
+                            v = 5,
+                            strata = song_popularity)
+```
+
+# Artificial Neural Network
+
+An Aritifical Neural Network (ANN) model expects numeric variables. Input data are processed as vectors of numbers. Therefore, the predictors Key, Time Signature and Audio Mode ought to be transformed to numeric variables as factors do not have an inherent numerical meaning. 
+
+To further prepare the data for ANN modelling all the explanatory variables need to be normalised. Normalisation ensures that each independent variable equally contributes to model performance by preventing bias towards variables with a larger magnitude. Moreover, the convergence speed during training is improved. The selected gradient optimisation algorithm to minimise the loss function through consistent penalties of large parameters controls the likelihood of overfitting. Similarly, the likelihood of an underfitting model due to vanishing gradients is stabalised. 
+
+```{r ANN recipe}
+nnet.recipe <- recipe(song_popularity ~ Duration_ms + Acousticness + Danceability + Energy + 
+                          Instrumentalness + Key + Liveness + Loudness + Audio_mode + Speechiness + 
+                          Tempo + Time_signature + Audio_valence, data = song.pop.train) |> 
+  step_dummy(all_nominal_predictors()) |>
+  step_normalize(all_predictors())
+```
+
+# ANN model and nnet engine
+
+The ANN model specifications are an nnet engine and the hyperparameters are hidden units, penalty and epochs.
+
+```{r ANN model, nnet engine and hyperparameters}
+nnet.spec <- mlp(hidden_units = tune(), penalty = tune(), epochs = tune()) |>
+  set_engine("nnet", MaxNWts = 2600) |>
+  set_mode("regression")
+```
+
+# Model recipe and specifications 
+
+```{r ANN workflow}
+nnet.wflow <-
+  workflow() |>
+  add_model(nnet.spec) |>
+  add_recipe(nnet.recipe)
+```
+
+# Parameter metrics 
+
+The model metrics selected for parameter tuning include residual mean squared error (RMSE) and adjusted r-squared (R²). RMSE captures the difference between a predicted value and true value while R² is indicative of the extent to which the explanatory variables account for influences on a response variable. Both values are useful for measuring the predictive power of a model. 
+
+```{r model metrics}
+mod.metrics <- metric_set(rmse, rsq)
+```
+
+To tune the ANN model's three parameters, racing method and 40 grid points are utlisied.
+
+```{r racing method}
+system.time(nnet.race <- nnet.wflow |>
+              tune_race_anova(
+                cross.val.folds,
+                grid = 40,
+                metrics = mod.metrics,
+                control = control_race(verbose_elim = TRUE)
+              )
+)
+```
+
+# best model parameter combination
+
+The combination of model parameters with the best residual mean squared error are defined by the count of hidden units, and varying penalty term, and epoch values.
+
+```{r best hyperparameters rmse}
+show_best(nnet.race, metric = "rmse")|>
+  select(-.estimator, -n, -.config, -.metric)
+```
+
+# Feature Importance
+
+A visualisation of relative feature importance in predicting song popularity shows that the three pivotal predictors are Loudness, Energy and Instrumentalness. 
+
+```{r optmised workflow, model fit and predictions}
+best.rmse <- nnet.race |> 
+  select_best(metric = "rmse")
+
+final.nnet.wflow <- nnet.wflow |>
+  finalize_workflow(best.rmse) 
+ 
+final.nnet.fit <- final.nnet.wflow |>
+  fit(data.cleaned3)
+
+explainer.reg <- explain_tidymodels(
+  final.nnet.fit,
+  data = data.cleaned3 |> 
+    select(-song_popularity), 
+  y = data.cleaned3 |> 
+    select(song_popularity),
+    label = "Regression",
+    verbose = FALSE
+  )
+
+model.feat.reg <- model_parts(explainer.reg)
+plot(model.feat.reg)
+```
+
+# Partial effects of the three most imporant features 
+
+Partial Dependency plots are useful visualisations for understanding the effects of music production in determining the popularity of a song. In accordance with the predictive model, as the intensity and activity of a track increases song popularity progressively decreases. Lower energy songs are a likely indicator of more frequent Spotify streams. Similarly, as the instrumentalness of a song increases song popularity intially results in a sharp dip and minimally declines thereafter. Songs with vocal elements likely engage Spotify listeners more. Lastly as the loudness of a song increases song popularity rises. A steep increase begins at around -15 dB which may be indicative of an amplitude "sweet-spot".
+
+```{r partial effects of vip features}
+pdp <- model_profile(
+  explainer.reg,
+  N = 100,
+  variables = c("Energy", "Loudness", "Instrumentalness", "Duration_ms")
+)
+
+par(mfrow = c(1, 1))
+plot(pdp, geom = "profiles")
+
+```
